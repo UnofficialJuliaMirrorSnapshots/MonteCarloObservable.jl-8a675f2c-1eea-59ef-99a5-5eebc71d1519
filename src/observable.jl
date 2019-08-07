@@ -103,7 +103,7 @@ Initialize non-external fields of observable `obs`.
 function _init!(obs::Observable{T}) where T
     # internal
     obs.n_meas = 0
-    obs.elsize = (-1,) # will be determined on first add! call
+    obs.elsize = (-1,) # will be determined on first push! call
     obs.colons = [Colon() for _ in 1:ndims(T)]
     obs.n_dims = ndims(T)
 
@@ -144,7 +144,7 @@ macro obs(arg)
     return quote
         # local o = Observable($(esc(eltype))($(esc(arg))), $(esc(string(arg))))
         local o = Observable($(esc(eltype))($(esc(arg))), "unnamed")
-        add!(o, $(esc(arg)))
+        push!(o, $(esc(arg)))
         o
     end
 end
@@ -156,7 +156,7 @@ macro diskobs(arg)
     return quote
         # local o = Observable($(esc(eltype))($(esc(arg))), $(esc(string(arg))))
         local o = Observable($(esc(eltype))($(esc(arg))), "unnamed"; inmemory=false)
-        add!(o, $(esc(arg)))
+        push!(o, $(esc(arg)))
         o
     end
 end
@@ -222,7 +222,7 @@ name(obs::Observable{T}) where T = obs.name
 
 Renames the observable.
 """
-rename(obs::Observable{T}, name::AbstractString) where T = begin obs.name = name; nothing end
+rename!(obs::Observable{T}, name::AbstractString) where T = begin obs.name = name; nothing end
 
 """
 Checks wether the observable is kept in memory (vs. on disk).
@@ -297,17 +297,8 @@ Base.summary(obs::Observable{T}) where T = summary(stdout, obs)
 
 
 # -------------------------------------------------------------------------
-#   add! and push!
+#   push! and push!
 # -------------------------------------------------------------------------
-"""
-Add measurements to an observable.
-
-    add!(obs::Observable{T}, measurement::T; verbose=false)
-    add!(obs::Observable{T}, measurements::AbstractVector{T}; verbose=false)
-
-"""
-function add!(obs::Observable) end
-
 """
 Add measurements to an observable.
 
@@ -322,37 +313,36 @@ function Base.push!(obs::Observable) end
 
 
 # adding single: numbers
-add!(obs::Observable{T}, measurement::S; kw...) where {T<:Number, S<:Number} = _add!(obs, measurement; kw...);
+Base.push!(obs::Observable{T}, measurement::S; kw...) where {T<:Number, S<:Number} = _push!(obs, measurement; kw...);
 
 # adding single: arrays
-add!(obs::Observable{Array{T,N}}, measurement::AbstractArray{S,N}; kw...) where {T, S<:Number, N} = _add!(obs, measurement; kw...);
+Base.push!(obs::Observable{Array{T,N}}, measurement::AbstractArray{S,N}; kw...) where {T, S<:Number, N} = _push!(obs, measurement; kw...);
 
 # adding multiple: vector of measurements
-function add!(obs::Observable{T}, measurements::AbstractVector{T}; kw...) where T
+function Base.push!(obs::Observable{T}, measurements::AbstractVector{T}; kw...) where T
     @inbounds for i in eachindex(measurements)
-        _add!(obs, measurements[i]; kw...)
+        _push!(obs, measurements[i]; kw...)
     end
     nothing
 end
 
 # adding multiple: arrays one dimension higher (last dim == ts dim)
-function add!(obs::Observable{T}, measurements::AbstractArray{S, N}; kw...) where {T,S<:Number,N}
+function Base.push!(obs::Observable{T}, measurements::AbstractArray{S, N}; kw...) where {T,S<:Number,N}
     N == obs.n_dims + 1 || throw(DimensionMismatch("Dimensions of given measurements ($(N-1)) don't match observable's dimensions ($(obs.n_dims))."))
     length(obs) == 0 || size(measurements)[1:N-1] == obs.elsize || error("Sizes of measurements don't match observable size.")
 
     @inbounds for i in Base.axes(measurements, ndims(measurements))
-        _add!(obs, measurements[.., i]; kw...)
+        _push!(obs, measurements[.., i]; kw...)
     end
     nothing
 end
 
 
-Base.push!(obs::Observable, measurement; kw...) = add!(obs, measurement; kw...);
-
+Base.append!(obs::Observable, measurement; kwargs...) = push!(obs, measurement; kwargs...)
 
 
 # implementation
-@inline function _add!(obs::Observable{T}, measurement; verbose=false) where T
+@inline function _push!(obs::Observable{T}, measurement; verbose=false) where T
     if obs.elsize == (-1,) # first add
         obs.elsize = size(measurement)
         obs.mean = zero(measurement)
@@ -370,7 +360,7 @@ Base.push!(obs::Observable, measurement; kw...) = add!(obs, measurement; kw...);
     obs.mean = (obs.n_meas * obs.mean + measurement) / (obs.n_meas + 1)
     obs.n_meas += 1
 
-    if obs.tsidx == length(obs.timeseries)+1 # next add! would overflow
+    if obs.tsidx == length(obs.timeseries)+1 # next push! would overflow
         verbose && println("Handling time series [chunk] overflow.")
         if inmemory(obs)
             verbose && println("Increasing time series size.")
@@ -397,7 +387,7 @@ end
     flush(obs::Observable)
 
 This is the crucial function if `inmemory(obs) == false`. It updates the time series on disk.
-It is called from `add!` everytime the alloc limit is reached (overflow).
+It is called from `push!` everytime the alloc limit is reached (overflow).
 
 You can call the function manually to save an intermediate state.
 """
@@ -727,10 +717,9 @@ function export_result(obs::Observable{T}, filename::AbstractString=obs.outfile,
         timeseries && write(f, joinpath(grp, "timeseries"), TimeSeriesSerializer(MonteCarloObservable.timeseries(obs)))
         write(f, joinpath(grp, "mean"), mean(obs))
         if error
-            err, conv = error_with_convergence(obs)
+            err = std_error(obs)
             write(f, joinpath(grp, "error"), err)
             write(f, joinpath(grp, "error_rel"), abs.(err./mean(obs)))
-            write(f, joinpath(grp, "error_conv"), string(conv))
         end
     end
     nothing
@@ -749,11 +738,9 @@ function export_error(obs::Observable{T}, filename::AbstractString=obs.outfile, 
     jldopen(filename, isfile(filename) ? "r+" : "w") do f
         !HDF5.has(f.plain, grp*"error") || delete!(f, grp*"error")
         !HDF5.has(f.plain, grp*"error_rel") || delete!(f, grp*"error_rel")
-        !HDF5.has(f.plain, grp*"error_conv") || delete!(f, grp*"error_conv")
-        err, conv = error_with_convergence(obs)
+        err = std_error(obs)
         write(f, joinpath(grp, "error"), err)
         write(f, joinpath(grp, "error_rel"), abs.(err./mean(obs)))
-        write(f, joinpath(grp, "error_conv"), string(conv))
     end
     nothing
 end
@@ -942,14 +929,14 @@ Statistics.mean(obs::Observable{T}) where T = length(obs) > 0 ? obs.mean : error
 """
 Standard deviation of the observable's time series (assuming uncorrelated data).
 
-See also [`mean(obs)`](@ref), [`var(obs)`](@ref), and [`error(obs)`](@ref).
+See also [`mean(obs)`](@ref), [`var(obs)`](@ref), and [`std_error(obs)`](@ref).
 """
 Statistics.std(obs::Observable{T}) where T = length(obs) > 0 ? std(timeseries(obs)) : error("Can't calculate std of empty observable.")
 
 """
 Variance of the observable's time series (assuming uncorrelated data).
 
-See also [`mean(obs)`](@ref), [`std(obs)`](@ref), and [`error(obs)`](@ref).
+See also [`mean(obs)`](@ref), [`std(obs)`](@ref), and [`std_error(obs)`](@ref).
 """
 Statistics.var(obs::Observable{T}) where T = length(obs) > 0 ? var(timeseries(obs)) : error("Can't calculate variance of empty observable.")
 
@@ -963,34 +950,16 @@ Statistics.var(obs::Observable{T}) where T = length(obs) > 0 ? var(timeseries(ob
 #   Statistics: error estimation
 # -------------------------------------------------------------------------
 """
-Estimate of the one-sigma error of the observable's mean.
+    std_error(obs::Observable[; method=:full])
+
+Estimates the standard error of the mean.
 Respects correlations between measurements through binning analysis.
 
-Note that this is not the same as `Base.std(timeseries(obs))`, not even
-for uncorrelated measurements.
+Optional `method` keyword can be `:log`, `:full`, or `:jackknife`.
 
 See also [`mean(obs)`](@ref).
 """
-Base.error(obs::Observable) = binning_error(timeseries(obs))
-BinningAnalysis.std_error(obs::Observable) = std_error(LogBinner(ts(obs)))
-Base.error(obs::Observable, binsize::Int) = binning_error(timeseries(obs), binsize)
-
-"""
-Returns one sigma error and convergence flag (don't trust it!).
-"""
-error_with_convergence(obs::Observable) = binning_error_with_convergence(timeseries(obs))
-
-"""
-Estimate of the one-sigma error of the observable's mean.
-Respects correlations between measurements through binning analysis.
-
-Strategy: just take largest R value considering an upper limit for bin size (min_nbins)
-"""
-error_naive(obs::Observable{T}) where T = binning_error_naive(timeseries(obs))
-
-
-
-
+BinningAnalysis.std_error(obs::Observable; method=:full) = BinningAnalysis.std_error(ts(obs); method=method)
 
 
 """
@@ -998,13 +967,19 @@ Integrated autocorrelation time (obtained by binning analysis).
 
 See also [`error(obs)`](@ref).
 """
-tau(obs::Observable{T}) where T = 0.5*(error(obs)^2 * length(obs) / var(obs) .- 1)
-tau(obs::Observable{T}, Rvalue::Float64) where T = tau(Rvalue)
-tau(Rvalue::Float64) = (Rvalue - 1)/2
-tau(ts::AbstractArray) = 0.5*(binning_error(ts)^2 * length(ts) / var(ts) .- 1)
+BinningAnalysis.tau(obs::Observable) = BinningAnalysis.tau(ts(obs))
 
 
+"""
+    jackknife(g::Function, obs1, ob2, ...)
 
+Computes the jackknife one sigma error of `g(obs1, obs2, ...)` by performing 
+a "leave-one-out" analysis.
+
+See BinningAnalysis.jl for more details.
+"""
+BinningAnalysis.jackknife(g::Function, obs::Observable{T}) where T = BinningAnalysis.jackknife(g, timeseries(obs))
+BinningAnalysis.jackknife(g::Function, obss::Observable{T}...) where T = BinningAnalysis.jackknife(g, hcat(timeseries.(obss)...))
 
 
 
@@ -1055,24 +1030,3 @@ function iswithinerrorbars(A::AbstractArray{T}, B::AbstractArray{S},
   return allequal
 end
 iswithinerrorbars(A::Observable, B::Observable, Δ, print=false) = iswithinerrorbars(timeseries(A), timeseries(B), Δ, print)
-
-
-
-
-
-"""
-    jackknife_error(g::Function, obs1, ob2, ...)
-
-Computes the jackknife one sigma error of `g(<obs1>, <obs2>, ...)` by performing 
-a "leave-one-out" analysis.
-
-The function `g(x)` must take one matrix argument `x`, whose columns correspond 
-to the time series of the observables, and produce a scalar (point estimate).
-
-Example:
-
-`g(x) = @views mean(x[:,1])^2 - mean(x[:,2].^2)` followed by `jackknife_error(g, obs1, obs2)`.
-Here `x[:,1]` is basically `timeseries(obs1)` and `x[:,2]` is `timeseries(obs2)`.
-"""
-jackknife_error(g::Function, obs::Observable{T}) where T = Jackknife.error(g, timeseries(obs))
-jackknife_error(g::Function, obss::Observable{T}...) where T = Jackknife.error(g, hcat(timeseries.(obss)...))

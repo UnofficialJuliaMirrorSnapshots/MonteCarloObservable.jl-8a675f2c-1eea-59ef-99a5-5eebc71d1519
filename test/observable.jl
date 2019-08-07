@@ -36,10 +36,10 @@
         obs = Observable(Float64, "myobs")
         @test inmemory(obs)
         @test isinmemory(obs)
-        @test add!(obs, 1.0) == nothing
+        @test push!(obs, 1.0) == nothing
         @test obs[1] == 1.0
         @test length(obs) == 1
-        @test add!(obs, 2.0:4.0) == nothing
+        @test push!(obs, 2.0:4.0) == nothing
         @test length(obs) == 4
         @test push!(obs, 5.0:9.0) == nothing
         @test length(obs) == 9
@@ -61,32 +61,32 @@
         # more than alloc test
         obs = Observable(Float64, "alloctest"; alloc=2)
         obsts = rand(3)
-        @test add!(obs, obsts) == nothing
+        @test push!(obs, obsts) == nothing
         @test ts(obs) == obsts
 
         # adding matrix observables
         ots = Array{Complex{Float64},2}[[0.756093+0.842213im 0.229536+0.982145im; 0.996734+0.104368im 0.198649+0.601362im], [0.66988+0.916039im 0.804259+0.976707im; 0.554345+0.249875im 0.369942+0.297061im], [0.714291+0.158981im 0.220397+0.845512im; 0.0493697+0.543434im 0.0556234+0.993021im], [0.319155+0.733874im 0.998182+0.729351im; 0.263825+0.568651im 0.848669+0.694285im]]
         obs = Observable(Matrix{ComplexF64}, "mcxobs")
-        @test add!(obs, ots[1]) == nothing
         @test push!(obs, ots[1]) == nothing
-        @test add!(obs, ots[2:3]) == nothing
+        @test push!(obs, ots[1]) == nothing
         @test push!(obs, ots[2:3]) == nothing
-        @test add!(obs, rand(ComplexF64, 2,2,3)) == nothing
-        @test_throws MethodError add!(obs, rand(["a", "b"], 2,2,3))
-        @test_throws DimensionMismatch add!(obs, rand(ComplexF64, 2,2,3,4))
-        @test_throws ErrorException add!(obs, rand(ComplexF64, 3,4,3))
+        @test push!(obs, ots[2:3]) == nothing
+        @test push!(obs, rand(ComplexF64, 2,2,3)) == nothing
+        @test_throws MethodError push!(obs, rand(["a", "b"], 2,2,3))
+        @test_throws DimensionMismatch push!(obs, rand(ComplexF64, 2,2,3,4))
+        @test_throws ErrorException push!(obs, rand(ComplexF64, 3,4,3))
 
         # adding vector observables
         ots = Array{Complex{Float64},1}[[0.256218+0.421853im, 0.233299+0.525431im], [0.551768+0.0536659im, 0.0137919+0.656025im], [0.467164+0.0565131im, 0.720137+0.486299im], [0.953352+0.694809im, 0.334231+0.56174im], [0.634737+0.88592im, 0.308682+0.944125im]]
         obs = Observable(Vector{ComplexF64}, "vcxobs")
-        @test add!(obs, ots[1]) == nothing
         @test push!(obs, ots[1]) == nothing
-        @test add!(obs, ots[2:3]) == nothing
+        @test push!(obs, ots[1]) == nothing
         @test push!(obs, ots[2:3]) == nothing
-        @test add!(obs, rand(ComplexF64, 2,3)) == nothing
-        @test_throws MethodError add!(obs, rand(["a", "b"], 2,3))
-        @test_throws DimensionMismatch add!(obs, rand(ComplexF64, 2,3,4))
-        @test_throws ErrorException add!(obs, rand(ComplexF64, 3,3))
+        @test push!(obs, ots[2:3]) == nothing
+        @test push!(obs, rand(ComplexF64, 2,3)) == nothing
+        @test_throws MethodError push!(obs, rand(["a", "b"], 2,3))
+        @test_throws DimensionMismatch push!(obs, rand(ComplexF64, 2,3,4))
+        @test_throws ErrorException push!(obs, rand(ComplexF64, 3,3))
 
         # reset
         reset!(obs)
@@ -122,28 +122,18 @@
             @test var(obs) == var(ots)
             @test var(obs) == 0.1173889852896399
 
-            @test error(obs) == 0.1083461975750141
-            @test binning_error(ots) == 0.1083461975750141
-            @test error(obs, 2) == 0.03447037957199948
-            @test binning_error(ots, 2) == 0.03447037957199948
+            @test std_error(obs) ≈ 0.1083461975750141
+            @test std_error(ots) ≈ 0.1083461975750141
             @test tau(obs) == 0.0
-            @test tau(obs, 1.23) == 0.11499999999999999
             @test tau(ots) == 0.0
-            @test tau(1.23) == 0.11499999999999999
-            @test error_with_convergence(obs) == (0.1083461975750141, false)
-            @test error_with_convergence(@obs rand(100000))[2] == true
-
-            # details
-            @test MonteCarloObservable.R_value(ots, 2) == 0.10121963870000192
-            @test typeof(MonteCarloObservable.R_function(ots)) == Tuple{UnitRange{Int},Array{Float64,1},Array{Float64,1}}
 
             # jackknife
-            @test jackknife_error(x->mean(x), obs) == 0.10834619757501414
-            @test jackknife_error(x->mean(1 ./ x), obs) == 79.76537738034833
-            @test Jackknife.estimate(x->mean(x), ts(obs)) == 0.45486176300000025
-            obs2 = @obs [0.606857, 0.0227746, 0.805997, 0.978731, 0.0853112, 0.311463, 0.628918, 0.0190664, 0.515998, 0.0223728]
-            g(x) = @views mean(x[:,1])^2 - mean(x[:,2].^2)
-            @test jackknife_error(g, obs, obs2) == 0.14501699232741938
+            @test jackknife(identity, obs)[2] ≈ 0.10834619757501414
+            @test jackknife(identity, 1 ./ ts(obs))[2] ≈ 79.76537738034833
+            @test jackknife(identity, ts(obs))[1] ≈ 0.45486176300000025
+            ots2 = [0.606857, 0.0227746, 0.805997, 0.978731, 0.0853112, 0.311463, 0.628918, 0.0190664, 0.515998, 0.0223728]
+            g(ots1, ots2) = ots1^2 - ots2
+            @test jackknife(g, ots, ots2 .^2)[2] ≈ 0.14501699232741938
 
             # scalar
             @test !iswithinerrorbars(3.123,3.12,0.001)
@@ -165,21 +155,15 @@
             @test var(obs) == var(ots)
             @test var(obs) == 0.11983153766987877
 
-            @test error(obs) == 0.09206504762323696
-            @test binning_error(ots) == 0.09206504762323696
-            @test error(obs, 2) == 0.12019696825992575
-            @test binning_error(ots, 2) == 0.12019696825992575
-            @test tau(obs) == -0.14633796917389313
-            @test tau(obs, 1.23) == 0.11499999999999999
-            @test tau(ots) == -0.14633796917389313
-            @test tau(1.23) == 0.11499999999999999
-            @test error_with_convergence(obs) == (0.09206504762323696, false)
-            @test error_with_convergence(@obs rand(ComplexF64, 100000))[2] == true
+            @test std_error(obs) ≈ 0.1094675923138345
+            @test std_error(ots) ≈ 0.1094675923138345
+            @test tau(obs) ≈ 0.0
+            @test tau(ots) ≈ 0.0
 
             # jackknife
-            @test jackknife_error(x->mean(x), obs) == 0.10946759231383452
-            @test jackknife_error(x->mean(1 ./ x), obs) == 0.1930517185451075
-            @test Jackknife.estimate(x->mean(x), ts(obs)) == 0.6514132999999989 + 0.5482495099999998im
+            @test jackknife(identity, obs)[2] ≈ 0.10946759231383452
+            @test jackknife(identity, 1 ./ ots)[2] ≈ 0.1930517185451075
+            @test jackknife(identity, ts(obs))[1] ≈ 0.6514132999999989 + 0.5482495099999998im
 
             # scalar
             @test !iswithinerrorbars(0.195 + 0.519im, 0.196 + 0.519im ,0.001)
@@ -198,21 +182,13 @@
             @test var(obs) == var(ots)
             @test isapprox(var(obs), [0.137449 0.0498229; 0.0754325 0.0208472], atol=1e-6)
 
-            @test isapprox(error(obs), [0.214048 0.128871; 0.158569 0.083361], atol=1e-6)
-            @test isapprox(binning_error(ots), [0.214048 0.128871; 0.158569 0.083361], atol=1e-6)
-            @test error(obs, 2) == [Inf Inf; Inf Inf]
-            @test binning_error(ots, 2) == [Inf Inf; Inf Inf]
-            @test isapprox(tau(obs), [2.036790901 -3.804975758; 1.318619 -2.876001], atol=1e-6)
-            @test isapprox(tau(ots), [2.036790901 -3.804975758; 1.318619 -2.876001], atol=1e-6)
-            ec = error_with_convergence(obs)
-            @test isapprox(ec[1], [0.214048 0.128871; 0.158569 0.083361], atol=1e-6)
-            @test ec[2] == Bool[false false; false false]
+            @test isapprox(std_error(obs), [0.214048 0.128871; 0.158569 0.083361], atol=1e-6)
+            @test isapprox(std_error(ots), [0.214048 0.128871; 0.158569 0.083361], atol=1e-6)
+            @test isapprox(tau(obs), [0.0 0.0; 0.0 0.0], atol=1e-6)
+            @test isapprox(tau(ots), [0.0 0.0; 0.0 0.0], atol=1e-6)
 
             # jackknife
-            # TODO: missing Base.error(g::Function, x::AbstractArray) or similar in jackknife.jl
-            # @test jackknife_error(x->mean(x), obs)
-            # @test jackknife_error(x->mean(1 ./ x), obs)
-            # @test Jackknife.estimate(x->mean(x), ts(obs))
+            # TODO: not supported by BinningAnalysis.jl?
 
             A = rand(2,2)
             B = A .+ 0.02
@@ -237,12 +213,12 @@
                     # macro
                     @test !inmemory(@diskobs rand(5))
 
-                    add!(obs, 1.0:9.0)
+                    push!(obs, 1.0:9.0)
                     @test !isfile(obs.outfile)
                     @test timeseries(obs) == 1.0:9.0
                     @test obs[1] == 1.0
                     @test obs[1:3] == 1.0:3.0
-                    add!(obs, 10.0)
+                    push!(obs, 10.0)
                     @test isfile(obs.outfile)
 
                     @test timeseries_frommemory("Observables.jld", "myobs") == 1.0:10.0
@@ -259,7 +235,7 @@
                     end
 
 
-                    add!(obs, 11.0:20.0)
+                    push!(obs, 11.0:20.0)
                     @test ts(obs) == 1.0:20.0
                     @test obs[1:3] == 1.0:3.0 # slice within chunk
                     @test obs[9:13] == 9.0:13.0 # slice spanning multiple chunks
@@ -277,7 +253,7 @@
 
                     # test manual flushing
                     obs = Observable(Float64, "flushtest"; inmemory=false, alloc=10)
-                    add!(obs, 1.0:5.0)
+                    push!(obs, 1.0:5.0)
                     isfile(obs.outfile) ? rm(obs.outfile) : nothing
                     @test flush(obs) == nothing
                     @test isfile(obs.outfile)
@@ -285,7 +261,7 @@
                     @test ts_flat(obs.outfile, "flushtest") == 1.0:5.0
                     obs2 = loadobs_frommemory(obs.outfile, "flushtest")
                     @test obs == obs2
-                    add!(obs, 6.0:10.0) # force regular flush
+                    push!(obs, 6.0:10.0) # force regular flush
                     obs2 = loadobs_frommemory(obs.outfile, "flushtest")
                     @test obs == obs2
 
@@ -311,9 +287,9 @@
                     @test !inmemory(@diskobs rand(ComplexF64, 10))
 
                     data = Complex{Float64}[0.589744+0.252428im, 0.737068+0.154224im, 0.65847+0.546091im, 0.536648+0.989492im, 0.365943+0.401982im, 0.679054+0.65316im, 0.517828+0.259064im, 0.452195+0.0356182im, 0.771914+0.392988im, 0.11461+0.23768im, 0.800796+0.584551im, 0.100475+0.400542im, 0.196098+0.325246im, 0.616814+0.480603im, 0.402191+0.400236im, 0.835151+0.981177im, 0.981963+0.554879im, 0.97145+0.854191im, 0.0723336+0.390246im, 0.831044+0.446365im]
-                    add!(obs, data[1:9])
+                    push!(obs, data[1:9])
                     @test !isfile(obs.outfile)
-                    add!(obs, data[10])
+                    push!(obs, data[10])
                     @test isfile(obs.outfile)
 
                     @test timeseries_frommemory("Observables.jld", "myobs") == data[1:10]
@@ -324,7 +300,7 @@
                     @test ts_flat("Observables.jld", "myobs") == data[1:10]
                     @test loadobs_frommemory("Observables.jld", "myobs") == obs
 
-                    add!(obs, data[11:20])
+                    push!(obs, data[11:20])
                     @test ts(obs) == data[1:20]
                     @test obs[1:3] == data[1:3] # slice within chunk
                     @test obs[9:13] == data[9:13] # slice spanning multiple chunks
@@ -346,9 +322,9 @@
                     @test !inmemory(@diskobs [rand(ComplexF64, 2,3) for _ in 1:2])
 
                     data = Array{Complex{Float64},2}[[0.497019+0.161613im 0.142061+0.205009im; 0.0387687+0.602916im 0.131416+0.641818im], [0.958829+0.250432im 0.82005+0.0678016im; 0.428906+0.40505im 0.323868+0.657073im], [0.267133+0.794451im 0.289949+0.363709im; 0.124168+0.541679im 0.519768+0.82765im], [0.932745+0.157519im 0.314411+0.0119721im; 0.266742+0.0445631im 0.756244+0.158147im]]
-                    add!(obs, data[1])
+                    push!(obs, data[1])
                     @test !isfile(obs.outfile)
-                    add!(obs, data[2])
+                    push!(obs, data[2])
                     @test isfile(obs.outfile)
 
                     data_flat = cat(data..., dims=3)
@@ -360,7 +336,7 @@
                     @test ts_flat("Observables.jld", "myobs") == data_flat[:,:,1:2]
                     @test loadobs_frommemory("Observables.jld", "myobs") == obs
 
-                    add!(obs, data[3:4])
+                    push!(obs, data[3:4])
                     @test ts(obs) == data[1:4]
                     @test obs[1:2] == data[1:2] # slice within chunk
                     @test obs[2:3] == data[2:3] # slice spanning multiple chunks
@@ -371,7 +347,7 @@
                     # test manual flushing
                     obs = Observable(Matrix{Float64}, "mflushtest"; inmemory=false, alloc=5)
                     obsts = [rand(2,2) for _ in 1:5]
-                    add!(obs, obsts[1:3])
+                    push!(obs, obsts[1:3])
                     isfile(obs.outfile) ? rm(obs.outfile) : nothing
                     @test flush(obs) == nothing
                     @test isfile(obs.outfile)
@@ -379,7 +355,7 @@
                     @test ts_flat(obs.outfile, "mflushtest") == cat(obsts[1:3]..., dims=3)
                     obs2 = loadobs_frommemory(obs.outfile, "mflushtest")
                     @test obs == obs2
-                    add!(obs, obsts[4:5]) # force regular flush
+                    push!(obs, obsts[4:5]) # force regular flush
                     obs2 = loadobs_frommemory(obs.outfile, "mflushtest")
                     @test obs == obs2
                 end
@@ -410,10 +386,8 @@
                 HDF5.h5open("myobs.jld", "r") do f
                     @test HDF5.has(f, "myobservables/obserror/error")
                     @test HDF5.has(f, "myobservables/obserror/error_rel")
-                    @test HDF5.has(f, "myobservables/obserror/error_conv")
-                    @test HDF5.read(f["myobservables/obserror/error"]) == error(obs)
-                    @test HDF5.read(f["myobservables/obserror/error_rel"]) == error(obs)/mean(obs)
-                    @test parse(Bool, HDF5.read(f["myobservables/obserror/error_conv"])) == false
+                    @test HDF5.read(f["myobservables/obserror/error"]) == std_error(obs)
+                    @test HDF5.read(f["myobservables/obserror/error_rel"]) == std_error(obs)/mean(obs)
                 end
 
                 rm("myobs.jld")
